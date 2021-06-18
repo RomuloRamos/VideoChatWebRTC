@@ -1,88 +1,169 @@
 class Business {
     constructor({ room, media, view, socketBuilder, peerBuilder }) {
-        this.room = room
-        this.media = media
-        this.view = view
+        this.room = room;
+        this.media = media;
+        this.view = view;
 
-        this.socketBuilder = socketBuilder
-        this.peerBuilder = peerBuilder
+        this.socketBuilder = socketBuilder;
+        this.peerBuilder = peerBuilder;
 
-        this.socket = {}
-        this.currentStream = {}
-        this.currentPeer = {}
+        this.socket = {};
+        this.currentStream = {};
+        this.currentPeer = {};
         
-        this.peers = new Map()
-    }
+        this.peers = new Map();
+        this.userRecordings = new Map();
+    };
+    
     static initialize(deps) {
-        const instance = new Business(deps)
-        return instance._init()
-    }
-    async _init() {
+        const instance = new Business(deps);
+        return instance._init();
+    };
 
-        this.currentStream = await this.media.getCamera()
+    async _init() {
+        this.view.configureRecordButton(this.onRecordPressed.bind(this));
+        this.view.configureLeaveButton(this.onLeavePressed.bind(this));
+
+        this.currentStream = await this.media.getCamera();
         this.socket = this.socketBuilder
             .setOnUserConnected(this.onUserConnected())
             .setOnUserDisconnected(this.onUserDisconnected())
-            .build()
+            .build();
 
         this.currentPeer = await this.peerBuilder
             .setOnError(this.onPeerError())
             .setOnConnectionOpened(this.onPeerConnectionOpened())
             .setOnCallReceived(this.onPeerCallReceived())
             .setOnPeerStreamReceived(this.onPeerStreamReceived())
-            .build()
+            .setOnCallError(this.onPeerCallError())
+            .setOnCallClose(this.onPeerCallClose())
+            .build();
 
-        this.addVideoStream('test01')
-    }
-
+        this.addVideoStream(this.currentPeer.id);
+    };
+    
     addVideoStream(userId, stream = this.currentStream) {
-        const isCurrentId = false
+        const recorderInstance = new Recorder(userId, stream);
+        this.userRecordings.set(recorderInstance.fileName, recorderInstance);
+        if(this.recordingEnabled){
+            recorderInstance.startRecording();
+        }
+        const isCurrentId = userId === this.currentPeer.id;
         this.view.renderVideo({
             userId,
             stream,
             isCurrentId
-        })
-    }
-
-    onUserConnected = function () {
+        });
+    };
+    
+    onUserConnected() {
         return userId => {
-            console.log('user connected!', userId)
-            this.currentPeer.call(userId, this.currentStream)
+            console.log('user connected!', userId);
+            this.currentPeer.call(userId, this.currentStream);
+        }
+    };
+
+    onUserDisconnected() {
+        return userId => {
+            console.log('user disconnected!', userId);
+
+            if(this.peers.has(userId)){
+                this.peers.get(userId).call.close();
+                this.peers.delete(userId);
+            }
+
+            this.view.setParticipants(this.peers.size);
+            this.stopRecording(userId);
+            this.view.removeVideElement(userId);
         }
     }
 
-    onUserDisconnected = function () {
-        return userId => {
-            console.log('user disconnected!', userId)
-        }
-    }
-
-    onPeerError = function () {
+    onPeerError() {
         return error => {
-            console.error('error on peer!', error)
+            console.error('error on peer!', error);
         }
     }
-    onPeerConnectionOpened = function () {
+    
+    onPeerConnectionOpened() {
         return (peer) => {
-            const id = peer.id
-            console.log('peer!!', peer)
-            this.socket.emit('join-room', this.room, id)
+            const id = peer.id;
+            console.log('peer!!', peer);
+            this.socket.emit('join-room', this.room, id);
         }
     }
-    onPeerCallReceived = function () {
+    
+    onPeerCallReceived() {
         return call => {
-            console.log('answering call', call)
-            call.answer(this.currentStream)
+            console.log('answering call', call);
+            call.answer(this.currentStream);
         }
     }
 
-    onPeerStreamReceived = function () {
+    onPeerStreamReceived() {
         return (call, stream ) => {
-            const callerId = call.peer 
-            this.addVideoStream(callerId, stream)
-            this.peers.set(callerId, { call })
+            const callerId = call.peer;
+            this.addVideoStream(callerId, stream);
+            this.peers.set(callerId, { call });
             
-            this.view.setParticipants(this.peers.size)
+            this.view.setParticipants(this.peers.size);
         }
     }
+
+    onPeerCallError() {
+        return (call, error) => {
+            console.log('an call errror ocurred! ', error);
+            this.view.removeVideElement(call.peer);
+        }
+    }
+
+    onPeerCallClose(){
+        return (call) => {
+            console.log('call closed! ', call.peer); 
+        }
+    }
+
+    onRecordPressed(recordingEnabled){
+        this.recordingEnabled = recordingEnabled;
+        console.log('pressionou!!', recordingEnabled);
+        for(const [key, value] of this.userRecordings){
+            if(this.recordingEnabled){
+                value.startRecording();
+                continue;
+            }
+            this.stopRecording(key);
+        }
+    }
+    
+    //se o usuário entrar e sair da call durante uma gravação
+    //precisamos parar as gravações anteriores dele
+    async stopRecording(userId){
+        const userRecordings = this.usersRecordings;
+
+        for(const[key,value] of userRecordings){
+            const isContextUser = key.includes(userId);
+            if(!isContextUser) continue;
+
+            const rec = value;
+            const isRecordingActive = rec.recordingActive;
+            if(!isRecordingActive) continue;
+
+            await rec.stopRecording();
+            this.playRecordings(key)
+        }
+    }
+
+    playRecordings(userId){
+        const user = this.usersRecordings.get(userId);
+        const videosURLs = user.getAllVideoURLs();
+        videosURLs.map(url =>{
+            this.view.renderVideo({url,userId});
+        });
+    }
+
+    onLeavePressed(){
+        console.log('pressionou Leave');
+        this.userRecordings.forEach((values, key) => value.download())
+    }
+
+
 }
